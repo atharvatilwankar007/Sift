@@ -30,12 +30,15 @@ import { addDays, startOfDay } from './lib/dates';
 type Tab = 'today' | 'ideas';
 type Toast = { text: string; bad?: boolean; undo?: () => void };
 
+// Public OAuth client for this app (not a secret: Google only accepts it from the allowed origins).
+const GOOGLE_CLIENT_ID = '750594411332-kq31dopcci6met9b612et71j7664q3ev.apps.googleusercontent.com';
 const DEFAULT_SETTINGS: Settings = { name: '', apiKey: '', googleClientId: '', dayStart: 8, dayEnd: 22 };
 const TABS: Tab[] = ['today', 'ideas'];
 
 export default function App() {
   const [items, setItems] = useStored<SiftItem[]>('sift.items', [], normalize);
-  const [settings, setSettings] = useStored<Settings>('sift.settings', DEFAULT_SETTINGS);
+  const [storedSettings, setSettings] = useStored<Settings>('sift.settings', DEFAULT_SETTINGS);
+  const settings: Settings = { ...storedSettings, googleClientId: storedSettings.googleClientId || GOOGLE_CLIENT_ID };
   const [tab, setTab] = useState<Tab>('today');
   const [dir, setDir] = useState(1);
   const [capture, setCapture] = useState<false | 'voice' | 'type'>(false);
