@@ -3,34 +3,27 @@
 Ramble your thoughts → Sift splits them into **tasks** and **ideas**, finds free time on your
 Google Calendar, and your phone reminds you through the Google Calendar app.
 
-You need three things, in this order: put the app online → Claude key → Google Calendar.
-It takes about 20 minutes.
+You need three things: the app online (done) → a free Gemini key → Google Calendar.
+
+**Live app:** https://atharvatilwankar007.github.io/Sift/
 
 ---
 
-## 1. Put it online (so your phone can open it)
+## 1. Online (already done)
 
-Android needs an `https://` address to use the microphone and install the app.
+The code lives at https://github.com/atharvatilwankar007/Sift. Every push to `main` rebuilds and
+redeploys the site automatically through GitHub Actions (`.github/workflows/deploy.yml`) in about
+30 seconds. Check progress under the repo's **Actions** tab.
 
-1. In this folder, build it:
-   ```bash
-   npm run build
-   ```
-   That creates a `dist` folder.
-2. Go to **https://app.netlify.com/drop** and sign up (free).
-3. Drag the **`dist`** folder onto the page. You get a URL like `https://something-123.netlify.app`.
-   Rename it under *Site configuration → Change site name*, e.g. `sift-yourname.netlify.app`.
-4. **Write that URL down.** You need it for Google in step 3.
+## 2. Gemini API key (the "brain", free)
 
-Every time you change the app later: `npm run build`, then drag `dist` onto *Deploys* in Netlify.
+1. Go to **https://aistudio.google.com/apikey** and sign in with your Google account.
+2. Click **Create API key** and copy it (starts with `AIza`).
+3. Paste it **only into Sift's Settings on your phone**. Don't paste it in chats, code or screenshots.
 
-## 2. Claude API key (the "brain")
-
-1. Go to **https://console.anthropic.com** and sign up.
-2. **Billing** → add credits ($5 lasts a long time; each brain dump costs roughly 2–5 cents).
-3. Optional but smart: **Limits** → set a monthly spend limit, e.g. $10.
-4. **Settings → API Keys → Create Key**. Copy it (starts with `sk-ant-`).
-5. Paste it **only into Sift's Settings on your phone**. Don't paste it in chats, code or screenshots.
+The free tier has daily limits that are plenty for personal use. On the free tier Google may use
+what you send to improve its products, so keep that in mind for sensitive details.
+A Claude key (`sk-ant-…` from console.anthropic.com) also works in the same field if you ever switch.
 
 The key stays in your phone's browser storage. It is never in the website itself, so sharing the
 URL on LinkedIn is safe: other people just get demo mode.
@@ -44,7 +37,7 @@ URL on LinkedIn is safe: other people just get demo mode.
    - **Audience → Test users → Add users** → add your own Gmail.
 4. **Clients → Create client**:
    - Application type: **Web application**
-   - **Authorized JavaScript origins**: add your Netlify URL (`https://sift-yourname.netlify.app`)
+   - **Authorized JavaScript origins**: add `https://atharvatilwankar007.github.io`
      and `http://localhost:5173` (for testing on your PC).
    - Create → copy the **Client ID** (ends with `.apps.googleusercontent.com`).
 5. In Sift → Settings → paste the Client ID → **Connect Google Calendar** → pick your account.
@@ -54,7 +47,7 @@ Google's sign-in lasts about an hour. When it expires, Sift tells you; tap **Con
 
 ## 4. Install on your Android phone
 
-1. Open your Netlify URL in **Chrome**.
+1. Open https://atharvatilwankar007.github.io/Sift/ in **Chrome**.
 2. ⋮ menu → **Add to Home screen** → **Install**.
 3. Open Sift from the home screen, allow the microphone, paste your key and Client ID in Settings.
 4. In the **Google Calendar** app, make sure notifications are on. That's what reminds you.

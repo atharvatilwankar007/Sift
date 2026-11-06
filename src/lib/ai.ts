@@ -79,11 +79,8 @@ function calendarTable(now: Date): string {
 
 export class SiftError extends Error {}
 
-export async function siftWithClaude(dump: string, apiKey: string, now = new Date()): Promise<AiResult> {
-  const { default: Anthropic } = await import('@anthropic-ai/sdk'); // loaded on first use
-  // Personal app with no server: the key lives only in this browser's storage.
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const context = `Current local time: ${now.toLocaleString('en-US', {
+function buildContext(dump: string, now: Date): string {
+  return `Current local time: ${now.toLocaleString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
   })} (${timeZone()}).
 
@@ -94,6 +91,74 @@ Brain dump:
 """
 ${dump.trim()}
 """`;
+}
+
+export type Provider = 'claude' | 'gemini';
+
+/** Claude keys start with "sk-ant-"; anything else is treated as a Google Gemini key. */
+export function providerFor(apiKey: string): Provider {
+  return apiKey.trim().startsWith('sk-ant-') ? 'claude' : 'gemini';
+}
+
+export function siftWithAI(dump: string, apiKey: string, now = new Date()): Promise<AiResult> {
+  return providerFor(apiKey) === 'claude' ? siftWithClaude(dump, apiKey, now) : siftWithGemini(dump, apiKey, now);
+}
+
+/* ---------- Google Gemini (free tier available) ---------- */
+
+// Fast, low-cost stable model; the second is a fallback if the first isn't available to this key.
+const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+
+export async function siftWithGemini(dump: string, apiKey: string, now = new Date()): Promise<AiResult> {
+  const { GoogleGenAI, ApiError } = await import('@google/genai'); // loaded on first use
+  // Personal app with no server: the key lives only in this browser's storage.
+  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+
+  let lastErr: unknown;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const res = await ai.models.generateContent({
+        model,
+        contents: buildContext(dump, now),
+        config: {
+          systemInstruction: SYSTEM,
+          responseMimeType: 'application/json',
+          responseJsonSchema: SCHEMA,
+        },
+      });
+      const text = res.text ?? '';
+      if (!text) throw new SiftError('Gemini returned nothing (it may have blocked that one). Try rephrasing.');
+      try {
+        return JSON.parse(text) as AiResult;
+      } catch {
+        throw new SiftError('Got an unexpected response. Try again.');
+      }
+    } catch (e) {
+      if (e instanceof SiftError) throw e;
+      lastErr = e;
+      if (e instanceof ApiError && e.status === 404) continue; // model not available: try the next one
+      if (e instanceof ApiError) {
+        const msg = e.message || '';
+        if (e.status === 400 && /api key/i.test(msg)) throw new SiftError('Your Gemini API key was rejected. Check it in Settings.');
+        if (e.status === 403) throw new SiftError('This Gemini key isn’t allowed to do that. Check it in Google AI Studio.');
+        if (e.status === 429) throw new SiftError('Free Gemini limit reached for now. Wait a minute (or until tomorrow) and try again.');
+        if (e.status >= 500) throw new SiftError('Gemini is having a moment. Try again shortly.');
+        throw new SiftError(`Gemini error (${e.status}). Try again.`);
+      }
+      throw new SiftError('Couldn’t reach Gemini. Are you online?');
+    }
+  }
+  console.error(lastErr);
+  throw new SiftError('No Gemini model was available for this key.');
+}
+
+/* ---------- Anthropic Claude (paid) ---------- */
+
+export async function siftWithClaude(dump: string, apiKey: string, now = new Date()): Promise<AiResult> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk'); // loaded on first use
+  // Personal app with no server: the key lives only in this browser's storage.
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const context = buildContext(dump, now);
 
   let res;
   try {

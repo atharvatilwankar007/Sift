@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Bell, CalendarCheck2, Eye, EyeOff, KeyRound, Trash2, X } from 'lucide-react';
 import type { Settings } from '../lib/types';
+import { providerFor } from '../lib/ai';
 
 export function SettingsSheet({
   settings,
@@ -51,14 +52,14 @@ export function SettingsSheet({
 
           <div className="group">
             <h3 className="section-label">
-              <KeyRound size={13} /> Claude API key
+              <KeyRound size={13} /> AI key (Gemini or Claude)
             </h3>
             <div className="field-row">
               <input
                 type={show ? 'text' : 'password'}
                 value={settings.apiKey}
                 onChange={(e) => set({ apiKey: e.target.value.trim() })}
-                placeholder="sk-ant-…"
+                placeholder="Paste your Gemini key (AIza…)"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -67,11 +68,16 @@ export function SettingsSheet({
               </button>
             </div>
             <p className="hint">
-              Stored only on this phone. Get one at{' '}
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">
-                console.anthropic.com
+              {settings.apiKey && (
+                <>
+                  Using <b>{providerFor(settings.apiKey) === 'claude' ? 'Claude' : 'Gemini'}</b>.{' '}
+                </>
+              )}
+              Stored only on this phone. Get a free key at{' '}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+                aistudio.google.com/apikey
               </a>
-              . Without a key Sift runs in demo mode.
+              . A Claude key (sk-ant-…) works too. Without a key Sift runs in demo mode.
             </p>
           </div>
 

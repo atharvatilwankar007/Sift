@@ -8,7 +8,7 @@ import { IdeasView } from './components/IdeasView';
 import { SettingsSheet } from './components/SettingsSheet';
 import { useStored, uid } from './lib/store';
 import type { AiItem, CalEvent, Interval, Settings, SiftItem } from './lib/types';
-import { demoSift, siftWithClaude, SiftError } from './lib/ai';
+import { demoSift, siftWithAI, SiftError } from './lib/ai';
 import { findSlot, slotToInterval } from './lib/scheduler';
 import {
   busyFrom,
@@ -144,7 +144,7 @@ export default function App() {
     try {
       const now = new Date();
       const [res, evs] = await Promise.all([
-        settings.apiKey ? siftWithClaude(text, settings.apiKey, now) : demoSift(text, now),
+        settings.apiKey ? siftWithAI(text, settings.apiKey, now) : demoSift(text, now),
         refreshEvents(),
       ]);
       const busyList = [...busyFrom(evs), ...itemBusy()];
