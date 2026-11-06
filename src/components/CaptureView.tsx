@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Mic, Square, Sparkles, X, Wand2 } from 'lucide-react';
 import { Orb } from './Orb';
-import { useSpeech } from '../lib/speech';
+import { useVoice } from '../lib/voice';
 import { DEMO_DUMP } from '../lib/ai';
 import { greeting } from '../lib/dates';
 
@@ -12,6 +12,11 @@ const THINKING = [
   'Checking your calendar…',
   'Finding the right moments…',
 ];
+
+const mmss = (ms: number) => {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 
 export function CaptureView({
   name,
@@ -25,10 +30,12 @@ export function CaptureView({
   onSift: (text: string) => Promise<boolean>;
 }) {
   const energy = useRef(0);
-  const speech = useSpeech(() => {
-    energy.current = Math.min(1, energy.current + 0.45);
+  const voice = useVoice((lvl) => {
+    energy.current = Math.max(energy.current, lvl);
   });
   const [line, setLine] = useState(0);
+  const recording = voice.phase === 'recording';
+  const transcribing = voice.phase === 'transcribing';
 
   useEffect(() => {
     if (!busy) return;
@@ -37,20 +44,30 @@ export function CaptureView({
     return () => clearInterval(id);
   }, [busy]);
 
-  const mode = busy ? 'thinking' : speech.listening ? 'listening' : 'idle';
-  const hasText = speech.text.trim().length > 0;
+  const mode = busy || transcribing ? 'thinking' : recording ? 'listening' : 'idle';
+  const hasText = voice.text.trim().length > 0;
+  const locked = busy || transcribing;
 
   const toggle = () => {
-    if (busy) return;
-    if (speech.listening) speech.stop();
-    else speech.start();
+    if (locked) return;
+    if (recording) voice.stop();
+    else voice.start();
   };
 
   const submit = async () => {
-    if (speech.listening) speech.stop();
-    const ok = await onSift(speech.text);
-    if (ok) speech.reset();
+    const ok = await onSift(voice.text);
+    if (ok) voice.reset();
   };
+
+  let status: string;
+  if (busy) status = THINKING[line];
+  else if (transcribing)
+    status = voice.download.ready
+      ? 'Turning your voice into text…'
+      : `Getting the voice model ready (one time)… ${voice.download.pct}%`;
+  else if (recording) status = `Listening · ${mmss(voice.elapsed)} · pause as long as you like`;
+  else if (hasText) status = 'Add more, edit, or sift it';
+  else status = 'Tap and talk. Ideas, tasks, anything.';
 
   return (
     <div className="capture">
@@ -59,69 +76,61 @@ export function CaptureView({
           {greeting()}
           {name ? `, ${name}` : ''}
         </p>
-        <h1 className="display">
-          What’s on <em>your mind?</em>
-        </h1>
+        <h1 className="display">What’s on your mind?</h1>
       </header>
 
       <button
         className={`orb-btn ${mode}`}
         onClick={toggle}
-        aria-label={speech.listening ? 'Stop listening' : 'Start talking'}
-        disabled={busy}
+        aria-label={recording ? 'Stop and transcribe' : 'Start talking'}
+        disabled={locked}
       >
         <div className="orb-halo" />
         <Orb mode={mode} energy={energy} />
-        <span className="orb-icon">
-          {busy ? <Sparkles size={26} /> : speech.listening ? <Square size={22} fill="currentColor" /> : <Mic size={28} />}
+        <span className={`orb-icon ${recording ? 'rec' : ''}`}>
+          {locked ? <Sparkles size={24} /> : recording ? <Square size={20} fill="currentColor" /> : <Mic size={26} />}
         </span>
       </button>
 
       <div className="status-line">
         <AnimatePresence mode="wait">
           <motion.p
-            key={busy ? `t${line}` : mode}
+            key={busy ? `t${line}` : transcribing ? 'tr' : recording ? 'rec' : hasText ? 'has' : 'idle'}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.25 }}
+            transition={{ duration: 0.2 }}
           >
-            {busy
-              ? THINKING[line]
-              : speech.listening
-                ? 'Listening… ramble away, tap to stop'
-                : hasText
-                  ? 'Edit if you like, then sift it'
-                  : 'Tap the orb and talk. Ideas, tasks, anything.'}
+            {status}
           </motion.p>
         </AnimatePresence>
       </div>
 
-      {speech.error && <p className="error-text">{speech.error}</p>}
+      {voice.error && <p className="error-text">{voice.error}</p>}
 
-      <div className={`dump ${speech.listening ? 'live' : ''}`}>
+      <div className={`dump ${recording ? 'live' : ''}`}>
         <textarea
-          value={speech.text}
-          onChange={(e) => speech.setText(e.target.value)}
-          readOnly={speech.listening || busy}
+          value={voice.text}
+          onChange={(e) => voice.setText(e.target.value)}
+          readOnly={locked}
           placeholder="…or type here. “Saw a cool idea for a café app, need to call grandma this weekend, pay my card bill…”"
           rows={4}
         />
-        {hasText && !speech.listening && !busy && (
-          <button className="icon-ghost clear" onClick={speech.reset} aria-label="Clear">
+        {hasText && !recording && !locked && (
+          <button className="icon-ghost clear" onClick={voice.reset} aria-label="Clear">
             <X size={16} />
           </button>
         )}
       </div>
 
       <AnimatePresence>
-        {hasText && !speech.listening && (
+        {hasText && !recording && !transcribing && (
           <motion.button
             className="btn-primary big"
             onClick={submit}
             disabled={busy}
-            initial={{ opacity: 0, y: 12, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
           >
             <Wand2 size={18} /> {busy ? 'Sifting…' : 'Sift it'}
@@ -129,8 +138,8 @@ export function CaptureView({
         )}
       </AnimatePresence>
 
-      {demo && !hasText && !speech.listening && !busy && (
-        <button className="link-btn" onClick={() => speech.setText(DEMO_DUMP)}>
+      {demo && !hasText && voice.phase === 'idle' && !busy && (
+        <button className="link-btn" onClick={() => voice.setText(DEMO_DUMP)}>
           Demo mode · try a sample ramble
         </button>
       )}

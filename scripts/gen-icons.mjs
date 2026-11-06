@@ -4,11 +4,11 @@ import { writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 
 const STOPS = [
-  [0, [124, 92, 255]],
-  [0.55, [255, 92, 168]],
-  [1, [255, 181, 71]],
+  [0, [94, 234, 212]],
+  [0.55, [160, 236, 140]],
+  [1, [198, 243, 107]],
 ];
-const BG = [7, 6, 13];
+const BG = [15, 16, 18];
 
 function grad(t) {
   t = Math.max(0, Math.min(1, t));

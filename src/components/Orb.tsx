@@ -3,10 +3,10 @@ import { useEffect, useRef } from 'react';
 export type OrbMode = 'idle' | 'listening' | 'thinking';
 
 const BLOBS = [
-  { color: [124, 92, 255], phase: 0, speed: 0.9, orbit: 0.22 },
-  { color: [255, 92, 168], phase: 2.1, speed: 1.15, orbit: 0.26 },
-  { color: [255, 181, 71], phase: 4.2, speed: 0.75, orbit: 0.2 },
-  { color: [61, 217, 255], phase: 1.2, speed: 1.3, orbit: 0.24 },
+  { color: [198, 243, 107], phase: 0, speed: 0.9, orbit: 0.22 },
+  { color: [94, 234, 212], phase: 2.1, speed: 1.15, orbit: 0.26 },
+  { color: [134, 239, 172], phase: 4.2, speed: 0.75, orbit: 0.2 },
+  { color: [226, 240, 200], phase: 1.2, speed: 1.3, orbit: 0.24 },
 ];
 
 /** Living gradient orb. `energy` (0..1) is nudged by the parent while you talk. */
@@ -49,7 +49,7 @@ export function Orb({ mode, energy, size = 260 }: { mode: OrbMode; energy: React
       ctx.arc(R, R, R * 0.78 * breathe, 0, Math.PI * 2);
       ctx.clip();
 
-      ctx.fillStyle = '#0d0b1e';
+      ctx.fillStyle = '#121410';
       ctx.fillRect(0, 0, size, size);
       ctx.globalCompositeOperation = 'lighter';
       ctx.filter = `blur(${size * 0.06}px)`;
