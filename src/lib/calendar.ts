@@ -150,7 +150,7 @@ export function busyFrom(events: CalEvent[]): Interval[] {
 
 export function eventTitle(item: SiftItem): string {
   if (item.kind === 'idea') {
-    const step = item.steps.find((s) => !s.done)?.text ?? 'Work on it';
+    const step = item.steps.find((s) => s.accepted && !s.done)?.text ?? 'Work on it';
     return `${item.emoji} ${step} · ${item.title}`;
   }
   return `${item.emoji} ${item.title}`;
@@ -161,8 +161,9 @@ export async function createEvent(item: SiftItem): Promise<string> {
   const tz = timeZone();
   const lines = [item.note];
   if (item.kind === 'idea') {
-    if (item.angle) lines.push('', `💡 ${item.angle}`);
-    lines.push('', 'Next steps:', ...item.steps.map((s) => `${s.done ? '✓' : '○'} ${s.text}`));
+    if (item.take) lines.push('', `💡 ${item.take}`);
+    const kept = item.steps.filter((s) => s.accepted);
+    if (kept.length) lines.push('', 'Steps:', ...kept.map((s) => `${s.done ? '✓' : '○'} ${s.text}`));
   }
   if (item.question) lines.push('', `❓ ${item.question}`);
   lines.push('', '— planned by Sift');

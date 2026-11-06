@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 
 /** useState that survives reloads via localStorage (fails soft if storage is blocked). */
-export function useStored<T>(key: string, initial: T) {
+export function useStored<T>(key: string, initial: T, revive?: (raw: unknown) => T) {
   const [value, setValue] = useState<T>(() => {
     try {
       const raw = localStorage.getItem(key);
       if (raw != null) {
         const parsed = JSON.parse(raw);
+        if (revive) return revive(parsed);
         if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null) return parsed as T;
         return { ...initialIfObject(initial), ...parsed } as T;
       }

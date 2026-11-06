@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'motion/react';
+import { Sheet } from './ui';
 import { Bell, CalendarCheck2, Eye, EyeOff, KeyRound, Trash2, X } from 'lucide-react';
 import type { Settings } from '../lib/types';
 import { providerFor } from '../lib/ai';
@@ -12,10 +12,14 @@ export function SettingsSheet({
   onDisconnect,
   onClearData,
   onClose,
+  unsynced,
+  onSync,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
   connected: boolean;
+  unsynced: number;
+  onSync: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onClearData: () => void;
@@ -28,16 +32,7 @@ export function SettingsSheet({
   const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
 
   return (
-    <motion.div className="sheet-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-      <motion.section
-        className="sheet"
-        onClick={(e) => e.stopPropagation()}
-        initial={{ y: '100%' }}
-        animate={{ y: 0 }}
-        exit={{ y: '100%' }}
-        transition={{ type: 'spring', damping: 30, stiffness: 260 }}
-      >
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} label="Settings">
         <header className="sheet-head">
           <h2 className="display small">Settings</h2>
           <button className="icon-ghost" onClick={onClose} aria-label="Close">
@@ -95,12 +90,19 @@ export function SettingsSheet({
               />
             </label>
             {connected ? (
-              <div className="field-row between">
-                <span className="ok-pill">● Connected</span>
-                <button className="btn-soft" onClick={onDisconnect}>
-                  Disconnect
-                </button>
-              </div>
+              <>
+                <div className="field-row between">
+                  <span className="ok-pill">● Connected</span>
+                  <button className="btn-soft" onClick={onDisconnect}>
+                    Disconnect
+                  </button>
+                </div>
+                {unsynced > 0 && (
+                  <button className="btn-soft" onClick={onSync}>
+                    Add {unsynced} saved item{unsynced > 1 ? 's' : ''} to Google Calendar
+                  </button>
+                )}
+              </>
             ) : (
               <button className="btn-soft" disabled={!settings.googleClientId} onClick={onConnect}>
                 Connect Google Calendar
@@ -157,7 +159,6 @@ export function SettingsSheet({
           </button>
           <p className="hint center">Sift · your thoughts, sorted</p>
         </div>
-      </motion.section>
-    </motion.div>
+    </Sheet>
   );
 }

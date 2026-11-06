@@ -11,7 +11,9 @@ export type Category =
   | 'learning'
   | 'errands';
 
-/** Shape Claude returns for each thing it pulled out of the brain dump. */
+/* ---------- What the AI returns ---------- */
+
+/** A brand-new thing pulled out of a brain dump. */
 export interface AiItem {
   kind: Kind;
   title: string;
@@ -22,17 +24,38 @@ export interface AiItem {
   deadline: string; // YYYY-MM-DD or ""
   earliest_date: string; // YYYY-MM-DD
   latest_date: string; // YYYY-MM-DD
+  specific_time: string; // "HH:MM" if the user named a time, else ""
   time_of_day: TimeOfDay;
   duration_minutes: number;
   clarifying_question: string; // "" if none
-  idea_angle: string; // ideas only, "" for tasks
-  next_steps: string[]; // ideas only, [] for tasks
+  user_take: string; // ideas: the user's own idea in their words, cleaned up
+  user_steps: string[]; // ideas: steps the USER said themselves
+  suggested_steps: string[]; // ideas: Sift's suggestions (user decides)
+  idea_angle: string; // ideas: one-line sharp angle, "" for tasks
+}
+
+/** A change to something that already exists ("move the café thing to Sunday"). */
+export interface AiUpdate {
+  target_id: string;
+  action: 'edit' | 'complete' | 'cancel' | 'add_to_idea';
+  change_summary: string; // human readable, e.g. "Moved to Sunday 5 PM"
+  title: string; // "" = unchanged
+  note_append: string;
+  earliest_date: string;
+  latest_date: string;
+  specific_time: string;
+  time_of_day: TimeOfDay | '';
+  deadline: string;
+  add_user_steps: string[];
 }
 
 export interface AiResult {
   summary: string;
-  items: AiItem[];
+  creates: AiItem[];
+  updates: AiUpdate[];
 }
+
+/* ---------- What the app stores ---------- */
 
 export interface Slot {
   start: string; // ISO datetime
@@ -40,8 +63,24 @@ export interface Slot {
 }
 
 export interface Step {
+  id: string;
   text: string;
   done: boolean;
+  source: 'mine' | 'suggested';
+  accepted: boolean; // suggestions start unaccepted until you keep them
+}
+
+export interface OnePager {
+  problem: string;
+  audience: string;
+  insight: string;
+  risks: string;
+  experiment: string;
+}
+
+export interface QA {
+  q: string;
+  a: string;
 }
 
 export interface SiftItem {
@@ -55,15 +94,23 @@ export interface SiftItem {
   deadline: string;
   earliest: string;
   latest: string;
+  specificTime: string;
   timeOfDay: TimeOfDay;
   durationMin: number;
   question: string;
-  angle: string;
-  steps: Step[];
   status: 'scheduled' | 'unscheduled' | 'done' | 'archived';
   slot: Slot | null;
   eventId: string | null;
   createdAt: string;
+  updatedAt: string;
+  // ideas
+  angle: string;
+  take: string;
+  steps: Step[];
+  stage: 'active' | 'parked' | 'killed';
+  onePager: OnePager | null;
+  qa: QA[];
+  notes: string[];
 }
 
 export interface Settings {

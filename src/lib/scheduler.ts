@@ -19,13 +19,23 @@ function overlaps(a: Interval, busy: Interval[]) {
  * inside the user's waking hours and around everything already on the calendar.
  */
 export function findSlot(
-  item: Pick<SiftItem, 'earliest' | 'latest' | 'deadline' | 'timeOfDay' | 'durationMin'>,
+  item: Pick<SiftItem, 'earliest' | 'latest' | 'deadline' | 'timeOfDay' | 'durationMin'> & { specificTime?: string },
   busy: Interval[],
   settings: Settings,
   now = new Date(),
 ): Slot | null {
   const dur = Math.max(10, Math.min(180, item.durationMin || 30)) * 60_000;
   const today = startOfDay(now);
+
+  // You named an exact time: respect it, even if something else is on the calendar.
+  const tm = /^(\d{1,2}):(\d{2})$/.exec(item.specificTime ?? '');
+  if (tm) {
+    const day = parseYmd(item.earliest) ?? today;
+    const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Number(tm[1]), Number(tm[2]));
+    if (start.getTime() < now.getTime()) start.setDate(start.getDate() + 1);
+    return { start: start.toISOString(), end: new Date(start.getTime() + dur).toISOString() };
+  }
+
   let first = parseYmd(item.earliest) ?? today;
   if (first < today) first = today;
   let last = parseYmd(item.latest) ?? addDays(first, 3);

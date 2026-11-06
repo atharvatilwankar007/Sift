@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { CalendarDays, Lightbulb, Mic, Settings2 } from 'lucide-react';
-import { CaptureView } from './components/CaptureView';
-import { ReviewSheet, type Draft } from './components/ReviewSheet';
-import { PlanView } from './components/PlanView';
+import { CaptureOverlay } from './components/CaptureOverlay';
+import { ReviewSheet, type Draft, type UpdateDraft } from './components/ReviewSheet';
+import { TodayView } from './components/TodayView';
 import { IdeasView } from './components/IdeasView';
+import { TaskSheet } from './components/TaskSheet';
+import { IdeaSheet } from './components/IdeaSheet';
 import { SettingsSheet } from './components/SettingsSheet';
-import { useStored, uid } from './lib/store';
-import type { AiItem, CalEvent, Interval, Settings, SiftItem } from './lib/types';
-import { demoSift, siftWithAI, SiftError } from './lib/ai';
+import { haptic, spring } from './components/ui';
+import { useStored } from './lib/store';
+import type { AiUpdate, CalEvent, Interval, Settings, SiftItem } from './lib/types';
+import { siftDump, SiftError } from './lib/ai';
 import { findSlot, slotToInterval } from './lib/scheduler';
+import { fromAi, nextStep, normalize, step } from './lib/items';
 import {
   busyFrom,
   connectGoogle,
@@ -23,56 +27,40 @@ import {
 } from './lib/calendar';
 import { addDays, startOfDay } from './lib/dates';
 
-type Tab = 'capture' | 'plan' | 'ideas';
+type Tab = 'today' | 'ideas';
+type Toast = { text: string; bad?: boolean; undo?: () => void };
 
 const DEFAULT_SETTINGS: Settings = { name: '', apiKey: '', googleClientId: '', dayStart: 8, dayEnd: 22 };
-
-function toItem(a: AiItem): SiftItem {
-  return {
-    id: uid(),
-    kind: a.kind === 'idea' ? 'idea' : 'task',
-    title: a.title,
-    note: a.note,
-    category: a.category,
-    emoji: a.emoji || '✨',
-    priority: a.priority,
-    deadline: a.deadline,
-    earliest: a.earliest_date,
-    latest: a.latest_date,
-    timeOfDay: a.time_of_day,
-    durationMin: a.duration_minutes || 30,
-    question: a.clarifying_question,
-    angle: a.idea_angle,
-    steps: (a.next_steps ?? []).map((text) => ({ text, done: false })),
-    status: 'unscheduled',
-    slot: null,
-    eventId: null,
-    createdAt: new Date().toISOString(),
-  };
-}
+const TABS: Tab[] = ['today', 'ideas'];
 
 export default function App() {
-  const [items, setItems] = useStored<SiftItem[]>('sift.items', []);
+  const [items, setItems] = useStored<SiftItem[]>('sift.items', [], normalize);
   const [settings, setSettings] = useStored<Settings>('sift.settings', DEFAULT_SETTINGS);
-  const [tab, setTab] = useState<Tab>('capture');
+  const [tab, setTab] = useState<Tab>('today');
+  const [dir, setDir] = useState(1);
+  const [capture, setCapture] = useState<false | 'voice' | 'type'>(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [review, setReview] = useState<{ summary: string; drafts: Draft[] } | null>(null);
+  const [review, setReview] = useState<{ summary: string; drafts: Draft[]; updates: UpdateDraft[] } | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [connected, setConnected] = useState(isConnected());
   const [events, setEvents] = useState<CalEvent[]>([]);
-  const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+  const dirty = useRef(new Set<string>());
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
-  const say = useCallback((text: string, bad = false) => {
-    setToast({ text, bad });
+  const say = useCallback((text: string, bad = false, undo?: () => void) => {
+    setToast({ text, bad, undo });
     window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 3600);
+    toastTimer.current = window.setTimeout(() => setToast(null), undo ? 5000 : 3400);
   }, []);
 
   const lostAuth = useCallback(() => {
     setConnected(false);
-    say('Google session expired. Reconnect in Settings.', true);
+    say('Google sign-in expired. Reconnect in Settings.', true);
   }, [say]);
 
   const refreshEvents = useCallback(async (): Promise<CalEvent[]> => {
@@ -96,7 +84,7 @@ export default function App() {
     refreshEvents();
   }, [settings.googleClientId, refreshEvents]);
 
-  /* Gentle in-app nudges while Sift is open (Google Calendar handles reminders otherwise). */
+  /* In-app nudges while Sift is open (Google Calendar handles reminders otherwise). */
   useEffect(() => {
     const check = async () => {
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
@@ -107,13 +95,13 @@ export default function App() {
         /* ignore */
       }
       const now = Date.now();
-      for (const it of items) {
+      for (const it of itemsRef.current) {
         if (it.status !== 'scheduled' || !it.slot) continue;
         const key = `${it.id}@${it.slot.start}`;
         const t = new Date(it.slot.start).getTime();
         if (t - now > 10 * 60_000 || t < now - 60_000 || sent.includes(key)) continue;
         sent.push(key);
-        const body = it.kind === 'idea' ? it.steps.find((s) => !s.done)?.text ?? it.title : it.note;
+        const body = it.kind === 'idea' ? nextStep(it)?.text ?? it.title : it.note;
         try {
           const reg = await navigator.serviceWorker?.getRegistration();
           if (reg) await reg.showNotification(`${it.emoji} ${it.title}`, { body, tag: key, icon: 'icon-192.png' });
@@ -131,30 +119,75 @@ export default function App() {
     check();
     const id = setInterval(check, 30_000);
     return () => clearInterval(id);
-  }, [items]);
+  }, []);
 
-  const itemBusy = (except?: string): Interval[] =>
-    items
+  /* ---------- helpers ---------- */
+
+  const busyFromItems = (except?: string): Interval[] =>
+    itemsRef.current
       .filter((i) => i.id !== except && i.status === 'scheduled' && i.slot && !i.eventId)
       .map((i) => slotToInterval(i.slot!));
+
+  const update = useCallback(
+    (id: string, patch: Partial<SiftItem>, markDirty = true) => {
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch, updatedAt: new Date().toISOString() } : i)));
+      if (markDirty) dirty.current.add(id);
+    },
+    [setItems],
+  );
+
+  /** Push an item's current state to Google Calendar (create, update or remove its event). */
+  const syncCalendar = useCallback(
+    async (it: SiftItem) => {
+      if (!isConnected()) return;
+      const wantsEvent =
+        it.slot && it.status !== 'archived' && it.stage !== 'killed' && it.stage !== 'parked' && new Date(it.slot.end) > new Date();
+      try {
+        if (wantsEvent) {
+          const eventId = await createEvent(it);
+          if (eventId !== it.eventId) update(it.id, { eventId }, false);
+        } else if (it.eventId && it.slot && new Date(it.slot.start) > new Date()) {
+          await deleteEvent(it.eventId);
+          update(it.id, { eventId: null }, false);
+        }
+      } catch (e) {
+        if (e instanceof NeedsAuth) lostAuth();
+        else console.error(e);
+      }
+    },
+    [update, lostAuth],
+  );
+
+  const closeSheet = () => {
+    const id = openId;
+    setOpenId(null);
+    if (id && dirty.current.has(id)) {
+      dirty.current.delete(id);
+      const it = itemsRef.current.find((i) => i.id === id);
+      if (it && isConnected()) syncCalendar(it).then(() => void refreshEvents());
+    }
+  };
+
+  /* ---------- sifting ---------- */
 
   const runSift = async (text: string): Promise<boolean> => {
     if (!text.trim()) return false;
     setBusy(true);
     try {
       const now = new Date();
-      const [res, evs] = await Promise.all([
-        settings.apiKey ? siftWithAI(text, settings.apiKey, now) : demoSift(text, now),
-        refreshEvents(),
-      ]);
-      const busyList = [...busyFrom(evs), ...itemBusy()];
-      const drafts: Draft[] = res.items.map((a) => {
-        const it = toItem(a);
-        const slot = findSlot(it, busyList, settings, now);
+      const [res, evs] = await Promise.all([siftDump(text, itemsRef.current, settings.apiKey, now), refreshEvents()]);
+      const busyList = [...busyFrom(evs), ...busyFromItems()];
+      const drafts: Draft[] = res.creates.map((a) => {
+        const it = fromAi(a);
+        const schedulable = it.kind === 'task' || nextStep(it);
+        const slot = schedulable ? findSlot(it, busyList, settings, now) : null;
         if (slot) busyList.push(slotToInterval(slot));
         return { ...it, slot, include: true };
       });
-      setReview({ summary: res.summary, drafts });
+      const byId = new Map(itemsRef.current.map((i) => [i.id, i]));
+      const updates: UpdateDraft[] = res.updates.map((u) => ({ u, target: byId.get(u.target_id)!, include: true }));
+      setCapture(false);
+      setReview({ summary: res.summary, drafts, updates });
       return true;
     } catch (e) {
       say(e instanceof SiftError ? e.message : 'Something went wrong. Try again.', true);
@@ -165,108 +198,158 @@ export default function App() {
     }
   };
 
-  const patchDraft = (id: string, patch: Partial<Draft>) =>
-    setReview((r) => r && { ...r, drafts: r.drafts.map((d) => (d.id === id ? { ...d, ...patch } : d)) });
-
-  const nextSlot = (id: string) => {
-    if (!review) return;
-    const d = review.drafts.find((x) => x.id === id);
-    if (!d) return;
-    const others = review.drafts.filter((x) => x.id !== id && x.include && x.slot).map((x) => slotToInterval(x.slot!));
-    const after = d.slot ? new Date(new Date(d.slot.start).getTime() + 5 * 60_000) : new Date();
-    const slot = findSlot(d, [...busyFrom(events), ...itemBusy(), ...others], settings, after);
-    if (slot) patchDraft(id, { slot });
-    else say('No other free time found in the next week.', true);
+  const applyUpdate = (it: SiftItem, u: AiUpdate, busyList: Interval[]): SiftItem => {
+    const n: SiftItem = { ...it, updatedAt: new Date().toISOString() };
+    if (u.action === 'complete') {
+      if (n.kind === 'idea') {
+        const s = nextStep(n);
+        if (s) n.steps = n.steps.map((x) => (x.id === s.id ? { ...x, done: true } : x));
+        n.status = 'unscheduled';
+        n.slot = null;
+      } else n.status = 'done';
+      return n;
+    }
+    if (u.action === 'cancel') {
+      if (n.kind === 'idea') n.stage = 'killed';
+      else n.status = 'archived';
+      return n;
+    }
+    if (u.title) n.title = u.title;
+    if (u.note_append) {
+      if (n.kind === 'idea') n.notes = [...n.notes, u.note_append];
+      else n.note = n.note ? `${n.note} · ${u.note_append}` : u.note_append;
+    }
+    if (u.add_user_steps?.length) {
+      const fresh = u.add_user_steps.map((t) => step(t, 'mine'));
+      n.steps = [...n.steps.filter((s) => s.accepted), ...fresh, ...n.steps.filter((s) => !s.accepted)];
+    }
+    if (u.deadline) n.deadline = u.deadline;
+    const timing = u.earliest_date || u.latest_date || u.specific_time || u.time_of_day;
+    if (timing) {
+      n.earliest = u.earliest_date || n.earliest;
+      n.latest = u.latest_date || u.earliest_date || n.latest;
+      n.specificTime = u.specific_time;
+      if (u.time_of_day) n.timeOfDay = u.time_of_day;
+      const slot = findSlot(n, busyList, settings);
+      if (slot) {
+        n.slot = slot;
+        n.status = 'scheduled';
+        busyList.push(slotToInterval(slot));
+      }
+    }
+    return n;
   };
 
   const confirmReview = async () => {
     if (!review) return;
     setSaving(true);
-    const chosen = review.drafts.filter((d) => d.include);
-    let gcalOk = connected && isConnected();
-    let synced = 0;
-    const saved: SiftItem[] = [];
-    for (const d of chosen) {
-      const { include: _include, ...item } = d;
-      void _include;
-      const it: SiftItem = { ...item, status: item.slot ? 'scheduled' : 'unscheduled' };
-      if (gcalOk && it.slot) {
-        try {
-          it.eventId = await createEvent(it);
-          synced++;
-        } catch (e) {
-          if (e instanceof NeedsAuth) {
-            gcalOk = false;
-            lostAuth();
-          } else console.error(e);
-        }
-      }
-      saved.push(it);
+    const busyList = [...busyFrom(events), ...busyFromItems()];
+    const changed = new Map<string, SiftItem>();
+    for (const x of review.updates) {
+      if (!x.include) continue;
+      const base = changed.get(x.target.id) ?? itemsRef.current.find((i) => i.id === x.target.id);
+      if (base) changed.set(base.id, applyUpdate(base, x.u, busyList));
     }
-    setItems((prev) => [...prev, ...saved]);
-    setSaving(false);
+    const created: SiftItem[] = review.drafts
+      .filter((d) => d.include)
+      .map(({ include: _drop, ...d }) => {
+        void _drop;
+        return { ...d, status: d.slot ? 'scheduled' : 'unscheduled' };
+      });
+    setItems((prev) => [...prev.map((i) => changed.get(i.id) ?? i), ...created]);
     setReview(null);
-    say(synced ? `Added ${synced} to Google Calendar ✓` : `Saved ${saved.length} to your plan ✓`);
-    setTab(saved.some((s) => s.kind === 'task') || saved.every((s) => s.slot) ? 'plan' : 'ideas');
-    if (synced) refreshEvents();
+    setSaving(false);
+    haptic(18);
+    const n = created.length + changed.size;
+    say(`Saved ${n} ${n === 1 ? 'thing' : 'things'} ✓`);
+    setDir(created.some((c) => c.kind === 'task') || changed.size ? -1 : 1);
+    setTab(created.length && created.every((c) => c.kind === 'idea') ? 'ideas' : 'today');
+    if (isConnected()) {
+      for (const it of [...changed.values(), ...created]) await syncCalendar(it);
+      refreshEvents();
+    }
   };
 
-  const update = (id: string, fn: (i: SiftItem) => SiftItem) => setItems((prev) => prev.map((i) => (i.id === id ? fn(i) : i)));
+  const nextSlotForDraft = (id: string) => {
+    if (!review) return;
+    const d = review.drafts.find((x) => x.id === id);
+    if (!d) return;
+    const others = review.drafts.filter((x) => x.id !== id && x.include && x.slot).map((x) => slotToInterval(x.slot!));
+    const after = d.slot ? new Date(new Date(d.slot.start).getTime() + 5 * 60_000) : new Date();
+    const slot = findSlot({ ...d, specificTime: '' }, [...busyFrom(events), ...busyFromItems(), ...others], settings, after);
+    if (slot) setReview({ ...review, drafts: review.drafts.map((x) => (x.id === id ? { ...x, slot } : x)) });
+    else say('No other free time found in the next week.', true);
+  };
+
+  /* ---------- item actions ---------- */
 
   const toggleDone = (id: string) => {
-    const it = items.find((i) => i.id === id);
+    const it = itemsRef.current.find((i) => i.id === id);
     if (!it) return;
     if (it.kind === 'idea') {
-      const k = it.steps.findIndex((s) => !s.done);
-      if (k >= 0) {
-        update(id, (i) => ({
-          ...i,
-          steps: i.steps.map((s, j) => (j === k ? { ...s, done: true } : s)),
-          status: 'unscheduled',
-          slot: null,
-          eventId: null,
-        }));
-        say('Step done. Find time for the next one in Ideas ✨');
-      }
+      const s = nextStep(it);
+      if (!s) return;
+      update(id, { steps: it.steps.map((x) => (x.id === s.id ? { ...x, done: true } : x)), status: 'unscheduled', slot: null, eventId: null }, false);
+      say('Step done ✓ Pick the next one in Ideas.');
       return;
     }
-    update(id, (i) => ({ ...i, status: i.status === 'done' ? (i.slot ? 'scheduled' : 'unscheduled') : 'done' }));
+    update(id, { status: it.status === 'done' ? (it.slot ? 'scheduled' : 'unscheduled') : 'done' }, false);
   };
 
-  const toggleStep = (id: string, k: number) =>
-    update(id, (i) => ({ ...i, steps: i.steps.map((s, j) => (j === k ? { ...s, done: !s.done } : s)) }));
-
-  const planNext = async (id: string) => {
-    const it = items.find((i) => i.id === id);
+  const remove = (id: string) => {
+    const it = itemsRef.current.find((i) => i.id === id);
     if (!it) return;
-    const now = new Date();
-    const evs = await refreshEvents();
-    const slot = findSlot(
-      { ...it, earliest: '', latest: '', deadline: '' },
-      [...busyFrom(evs), ...itemBusy(id)],
-      settings,
-      now,
-    );
-    if (!slot) return say('No free time found this week.', true);
-    let next: SiftItem = { ...it, slot, status: 'scheduled', eventId: null };
-    if (isConnected()) {
-      try {
-        next = { ...next, eventId: await createEvent(next) };
-      } catch (e) {
-        if (e instanceof NeedsAuth) lostAuth();
-      }
-    }
-    update(id, () => next);
-    say(next.eventId ? 'Next step is on your calendar ✓' : 'Next step planned ✓');
-  };
-
-  const archive = async (id: string) => {
-    const it = items.find((i) => i.id === id);
-    update(id, (i) => ({ ...i, status: 'archived' }));
-    if (it?.eventId && it.slot && new Date(it.slot.start) > new Date()) {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    if (openId === id) setOpenId(null);
+    if (it.eventId && it.slot && new Date(it.slot.start) > new Date()) {
       deleteEvent(it.eventId).catch((e) => e instanceof NeedsAuth && lostAuth());
     }
-    say('Idea archived');
+    say(`Deleted “${it.title}”`, false, () => {
+      const back = { ...it, eventId: null };
+      setItems((prev) => [...prev, back]);
+      if (isConnected()) syncCalendar(back);
+      setToast(null);
+    });
+  };
+
+  const findSlotFor = async (id: string) => {
+    const it = itemsRef.current.find((i) => i.id === id);
+    if (!it) return;
+    const evs = await refreshEvents();
+    const slot = findSlot({ ...it, specificTime: '', earliest: '', latest: '', deadline: '' }, [...busyFrom(evs), ...busyFromItems(id)], settings, new Date());
+    if (!slot) return say('No free time found this week.', true);
+    update(id, { slot, status: 'scheduled', specificTime: '' });
+    say('Found a slot ✓');
+  };
+
+  const planNext = async (id: string) => {
+    const it = itemsRef.current.find((i) => i.id === id);
+    if (!it || !nextStep(it)) return;
+    const evs = await refreshEvents();
+    const after = it.slot && new Date(it.slot.end) > new Date() ? new Date(new Date(it.slot.start).getTime() + 5 * 60_000) : new Date();
+    const slot = findSlot({ ...it, specificTime: '', earliest: '', latest: '', deadline: '' }, [...busyFrom(evs), ...busyFromItems(id)], settings, after);
+    if (!slot) return say('No free time found this week.', true);
+    const next = { ...it, slot, status: 'scheduled' as const };
+    update(id, { slot, status: 'scheduled' });
+    if (isConnected()) {
+      await syncCalendar(next);
+      dirty.current.delete(id);
+    }
+    say(isConnected() ? 'Next step is on your calendar ✓' : 'Next step planned ✓');
+  };
+
+  const setStage = (id: string, stage: SiftItem['stage']) => {
+    update(id, { stage });
+    const it = itemsRef.current.find((i) => i.id === id);
+    if (it) syncCalendar({ ...it, stage });
+    say(stage === 'parked' ? 'Parked for later' : stage === 'killed' ? 'Let go. It’s in the “Let go” tab if you change your mind.' : 'Back in motion');
+  };
+
+  const syncAll = async () => {
+    const todo = itemsRef.current.filter((i) => i.status === 'scheduled' && i.slot && !i.eventId && new Date(i.slot.end) > new Date());
+    for (const it of todo) await syncCalendar(it);
+    refreshEvents();
+    say(`Added ${todo.length} to Google Calendar ✓`);
   };
 
   const connect = async () => {
@@ -280,19 +363,17 @@ export default function App() {
     }
   };
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'plan', label: 'Plan', icon: <CalendarDays size={20} /> },
-    { id: 'capture', label: 'Capture', icon: <Mic size={22} /> },
-    { id: 'ideas', label: 'Ideas', icon: <Lightbulb size={20} /> },
-  ];
+  const go = (t: Tab) => {
+    setDir(TABS.indexOf(t) > TABS.indexOf(tab) ? 1 : -1);
+    setTab(t);
+  };
+
+  const open = openId ? items.find((i) => i.id === openId) : undefined;
+  const unsynced = items.filter((i) => i.status === 'scheduled' && i.slot && !i.eventId && new Date(i.slot.end) > new Date()).length;
 
   return (
     <div className="app">
-      <div className="aurora" aria-hidden>
-        <span className="a1" />
-        <span className="a2" />
-        <span className="a3" />
-      </div>
+      <div className="glow" aria-hidden />
       <div className="grain" aria-hidden />
 
       <div className="topbar">
@@ -312,58 +393,109 @@ export default function App() {
       </div>
 
       <main className="main">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="popLayout" initial={false} custom={dir}>
           <motion.div
             key={tab}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.22 }}
+            custom={dir}
+            variants={{
+              enter: (d: number) => ({ x: d * 60, opacity: 0 }),
+              center: { x: 0, opacity: 1 },
+              exit: (d: number) => ({ x: d * -60, opacity: 0 }),
+            }}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={spring}
           >
-            {tab === 'capture' && (
-              <CaptureView name={settings.name} busy={busy} demo={!settings.apiKey} onSift={runSift} />
-            )}
-            {tab === 'plan' && <PlanView items={items} events={events} onToggleDone={toggleDone} />}
-            {tab === 'ideas' && (
-              <IdeasView items={items} onToggleStep={toggleStep} onPlanNext={planNext} onArchive={archive} />
+            {tab === 'today' ? (
+              <TodayView items={items} events={events} onOpen={setOpenId} onToggleDone={toggleDone} onDelete={remove} />
+            ) : (
+              <IdeasView items={items} onOpen={setOpenId} onStage={setStage} />
             )}
           </motion.div>
         </AnimatePresence>
       </main>
 
       <nav className="tabbar">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            className={`tab ${tab === t.id ? 'active' : ''} ${t.id === 'capture' ? 'center' : ''}`}
-            onClick={() => setTab(t.id)}
-            aria-label={t.label}
-          >
-            {tab === t.id && <motion.span layoutId="tab-pill" className="tab-pill" />}
-            <span className="tab-icon">{t.icon}</span>
-            <span className="tab-label">{t.label}</span>
-          </button>
-        ))}
+        <button className={`tab ${tab === 'today' ? 'active' : ''}`} onClick={() => go('today')} aria-label="Today">
+          <CalendarDays size={21} />
+          <span>Today</span>
+        </button>
+        <div className="fab-slot">
+          {!capture && (
+            <motion.button
+              layoutId="mic"
+              className="fab"
+              onClick={() => {
+                haptic(12);
+                setCapture('voice');
+              }}
+              aria-label="Talk to Sift"
+              whileTap={{ scale: 0.92 }}
+              transition={spring}
+            >
+              <Mic size={24} />
+            </motion.button>
+          )}
+        </div>
+        <button className={`tab ${tab === 'ideas' ? 'active' : ''}`} onClick={() => go('ideas')} aria-label="Ideas">
+          <Lightbulb size={21} />
+          <span>Ideas</span>
+        </button>
       </nav>
+
+      <AnimatePresence>
+        {capture && (
+          <CaptureOverlay key="capture" busy={busy} demo={!settings.apiKey} typeFirst={capture === 'type'} onSift={runSift} onClose={() => setCapture(false)} />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {review && (
           <ReviewSheet
+            key="review"
             summary={review.summary}
             drafts={review.drafts}
+            updates={review.updates}
             connected={connected}
             saving={saving}
-            onChange={patchDraft}
-            onNextSlot={nextSlot}
+            onChange={(id, patch) => setReview((r) => r && { ...r, drafts: r.drafts.map((d) => (d.id === id ? { ...d, ...patch } : d)) })}
+            onToggleUpdate={(i) => setReview((r) => r && { ...r, updates: r.updates.map((u, j) => (j === i ? { ...u, include: !u.include } : u)) })}
+            onNextSlot={nextSlotForDraft}
             onConfirm={confirmReview}
             onClose={() => setReview(null)}
           />
         )}
+        {open && open.kind === 'task' && (
+          <TaskSheet
+            key={`t-${open.id}`}
+            item={open}
+            onChange={(p) => update(open.id, p)}
+            onFindSlot={() => findSlotFor(open.id)}
+            onDelete={() => remove(open.id)}
+            onClose={closeSheet}
+          />
+        )}
+        {open && open.kind === 'idea' && (
+          <IdeaSheet
+            key={`i-${open.id}`}
+            item={open}
+            apiKey={settings.apiKey}
+            onChange={(p) => update(open.id, p)}
+            onPlanNext={() => planNext(open.id)}
+            onDelete={() => remove(open.id)}
+            onClose={closeSheet}
+            say={say}
+          />
+        )}
         {settingsOpen && (
           <SettingsSheet
+            key="settings"
             settings={settings}
             onChange={setSettings}
             connected={connected}
+            unsynced={unsynced}
+            onSync={syncAll}
             onConnect={connect}
             onDisconnect={() => {
               disconnect();
@@ -382,11 +514,17 @@ export default function App() {
         {toast && (
           <motion.div
             className={`toast ${toast.bad ? 'bad' : ''}`}
-            initial={{ opacity: 0, y: 20, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, x: '-50%' }}
-            exit={{ opacity: 0, y: 20, x: '-50%' }}
+            initial={{ opacity: 0, y: 24, x: '-50%', scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, x: '-50%', scale: 1 }}
+            exit={{ opacity: 0, y: 24, x: '-50%' }}
+            transition={spring}
           >
-            {toast.text}
+            <span>{toast.text}</span>
+            {toast.undo && (
+              <button className="toast-undo" onClick={toast.undo}>
+                Undo
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
